@@ -38,8 +38,9 @@ namespace ILRepacking
         // contains all assemblies, primary and 'other'
         public List<AssemblyDefinition> MergedAssemblies { get; private set; }
         public AssemblyDefinition TargetAssemblyDefinition { get; private set; }
-        public AssemblyDefinition PrimaryAssemblyDefinition { get; private set; }
+        public AssemblyDefinition PrimaryAssemblyDefinition { get; set; }
         public RepackAssemblyResolver GlobalAssemblyResolver { get; } = new RepackAssemblyResolver();
+        public bool MemoryOnly { get; set; }
 
         public ModuleDefinition TargetAssemblyMainModule => TargetAssemblyDefinition.MainModule;
         public ModuleDefinition PrimaryAssemblyMainModule => PrimaryAssemblyDefinition.MainModule;
@@ -76,7 +77,7 @@ namespace ILRepacking
             MergedAssemblyFiles = Options.InputAssemblies.SelectMany(ResolveFile).Distinct().ToList();
             OtherAssemblies = new List<AssemblyDefinition>();
             // TODO: this could be parallelized to gain speed
-            var primary = MergedAssemblyFiles.FirstOrDefault();
+            var primary = PrimaryAssemblyDefinition == null ? MergedAssemblyFiles.FirstOrDefault() : null;
             var debugSymbolsRead = false;
             foreach (string assembly in MergedAssemblyFiles)
             {
@@ -315,6 +316,10 @@ namespace ILRepacking
             // write PDB/MDB?
             if (Options.DebugInfo)
                 parameters.WriteSymbols = true;
+
+            if (MemoryOnly)
+                return;
+
             // create output directory if it does not exist
             var outputDir = Path.GetDirectoryName(Options.OutputFile);
             if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
