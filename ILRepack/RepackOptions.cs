@@ -44,6 +44,7 @@ namespace ILRepacking
         public string TargetPlatformDirectory { get; set; }
         public string TargetPlatformVersion { get; set; }
         public IEnumerable<string> SearchDirectories { get; set; }
+        public IEnumerable<string> SearchAssemblies { get; set; }
         public bool UnionMerge { get; set; }
         public Version Version { get; set; }
         public bool XmlDocumentation { get; set; }

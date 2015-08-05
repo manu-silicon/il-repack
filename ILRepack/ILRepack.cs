@@ -77,7 +77,13 @@ namespace ILRepacking
             MergedAssemblyFiles = Options.InputAssemblies.SelectMany(ResolveFile).Distinct().ToList();
             OtherAssemblies = new List<AssemblyDefinition>();
             // TODO: this could be parallelized to gain speed
-            var primary = PrimaryAssemblyDefinition == null ? MergedAssemblyFiles.FirstOrDefault() : null;
+            var primary = MergedAssemblyFiles.FirstOrDefault();
+            if (PrimaryAssemblyDefinition != null)
+            {
+                primary = PrimaryAssemblyFile;
+                GlobalAssemblyResolver.RegisterAssemblies(new List<AssemblyDefinition> { PrimaryAssemblyDefinition });
+            }
+
             var debugSymbolsRead = false;
             foreach (string assembly in MergedAssemblyFiles)
             {
@@ -372,6 +378,12 @@ namespace ILRepacking
                 var facadesDirectory = Path.Combine(targetPlatformDirectory, "Facades");
                 if (Directory.Exists(facadesDirectory))
                     GlobalAssemblyResolver.AddSearchDirectory(facadesDirectory);
+            }
+
+            if (Options.SearchAssemblies != null)
+            {
+                var rp = new ReaderParameters { AssemblyResolver = GlobalAssemblyResolver };
+                GlobalAssemblyResolver.RegisterAssemblies(Options.SearchAssemblies.Select(x => AssemblyDefinition.ReadAssembly(x, rp)).ToList());
             }
         }
 
