@@ -15,6 +15,10 @@ namespace ILRepack.IntegrationTests.Peverify
 {
     public static class PeverifyHelper
     {
+        public const string META_E_CA_FRIENDS_SN_REQUIRED = "801311e6";
+        public const string VER_E_TOKEN_RESOLVE = "80131869";
+        public const string VER_E_TYPELOAD = "801318f3";
+
         static Regex Success = new Regex(@"All Classes and Methods in .* Verified");
         static Regex Failure = new Regex(@"\d+ Error\(s\) Verifying .*");
         public static IObservable<string> Peverify(string workingDirectory, params string[] args)
@@ -22,7 +26,7 @@ namespace ILRepack.IntegrationTests.Peverify
             // TODO better path finding ?
             // TODO use pedump --verify code,metadata on Mono ?
             var verifierPath = @"C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.6 Tools\peverify.exe";
-            var arg = $"\"{verifierPath}\" /NOLOGO {String.Join(" ", args)}";
+            var arg = $"\"{verifierPath}\" /NOLOGO /hresult /md /il {String.Join(" ", args)}";
             var info = new ProcessStartInfo
             {
                 CreateNoWindow = true,
@@ -33,6 +37,25 @@ namespace ILRepack.IntegrationTests.Peverify
                 Arguments = arg
             };
             return new ObservableProcess(info).Output.Where(s => !Success.IsMatch(s) && !Failure.IsMatch(s));
+        }
+
+        public static IObservable<string> ToErrorCodes(this IObservable<string> output)
+        {
+            return output.SelectMany(e =>
+            {
+                var i = e.IndexOf("[HRESULT 0x");
+                if (i != -1)
+                    return Observable.Return(e.Substring(i + 11, 8).ToLowerInvariant());
+                i = e.IndexOf("[MD](0x");
+                if (i != -1)
+                    return Observable.Return(e.Substring(i + 7, 8).ToLowerInvariant());
+                i = e.IndexOf("(Error: 0x");
+                if (i != -1)
+                    return Observable.Return(e.Substring(i + 10, 8).ToLowerInvariant());
+
+                return Observable.Empty<string>();
+            }
+            ).Distinct();
         }
 
         private static string FindRegistryValueUnderKey(string registryBaseKeyName, string registryKeyName, RegistryView registryView)

@@ -51,7 +51,7 @@ namespace ILRepacking
             cache[name] = assembly;
         }
 
-        public void RegisterAssemblies(List<AssemblyDefinition> mergedAssemblies)
+        public void RegisterAssemblies(IList<AssemblyDefinition> mergedAssemblies)
         {
             foreach (var assemblyDefinition in mergedAssemblies)
             {

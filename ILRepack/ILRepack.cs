@@ -23,6 +23,8 @@ using ILRepacking.Steps;
 using Mono.Cecil;
 using Mono.Cecil.PE;
 using Mono.Unix.Native;
+using ILRepacking.Mixins;
+using System.Runtime.Serialization.Formatters.Binary;
 
 namespace ILRepacking
 {
@@ -31,12 +33,12 @@ namespace ILRepacking
         internal RepackOptions Options;
         internal ILogger Logger;
 
-        internal List<string> MergedAssemblyFiles { get; set; }
+        internal IList<string> MergedAssemblyFiles { get; set; }
         internal string PrimaryAssemblyFile { get; set; }
         // contains all 'other' assemblies, but not the primary assembly
-        public List<AssemblyDefinition> OtherAssemblies { get; private set; }
-        // contains all assemblies, primary and 'other'
-        public List<AssemblyDefinition> MergedAssemblies { get; private set; }
+        public IList<AssemblyDefinition> OtherAssemblies { get; private set; }
+        // contains all assemblies, primary (first one) and 'other'
+        public IList<AssemblyDefinition> MergedAssemblies { get; private set; }
         public AssemblyDefinition TargetAssemblyDefinition { get; private set; }
         public AssemblyDefinition PrimaryAssemblyDefinition { get; set; }
         public RepackAssemblyResolver GlobalAssemblyResolver { get; } = new RepackAssemblyResolver();
@@ -74,7 +76,7 @@ namespace ILRepacking
 
         private void ReadInputAssemblies()
         {
-            MergedAssemblyFiles = Options.InputAssemblies.SelectMany(ResolveFile).Distinct().ToList();
+            MergedAssemblyFiles = Options.ResolveFiles();
             OtherAssemblies = new List<AssemblyDefinition>();
             // TODO: this could be parallelized to gain speed
             var primary = MergedAssemblyFiles.FirstOrDefault();
@@ -102,7 +104,7 @@ namespace ILRepacking
             Options.DebugInfo = debugSymbolsRead;
 
             MergedAssemblies = new List<AssemblyDefinition>(OtherAssemblies);
-            MergedAssemblies.Add(PrimaryAssemblyDefinition);
+            MergedAssemblies.Insert(0, PrimaryAssemblyDefinition);
         }
 
         private AssemblyDefinitionContainer ReadInputAssembly(string assembly, bool isPrimary)
@@ -160,23 +162,20 @@ namespace ILRepacking
             }
         }
 
+        IMetadataScope IRepackContext.MergeScope(IMetadataScope scope)
+        {
+            if (scope is AssemblyNameReference)
+                return TargetAssemblyMainModule.AssemblyReferences.AddUniquely((Mono.Cecil.AssemblyNameReference)scope);
+            Logger.Warn("Merging a module scope, probably not supported");
+            return scope;
+        }
+
         internal class AssemblyDefinitionContainer
         {
             public bool SymbolsRead { get; set; }
             public AssemblyDefinition Definition { get; set; }
             public string Assembly { get; set; }
             public bool IsPrimary { get; set; }
-        }
-
-        private IEnumerable<string> ResolveFile(string s)
-        {
-            if (!Options.AllowWildCards || s.IndexOfAny(new[] { '*', '?' }) == -1)
-                return new[] { s };
-            if (Path.GetDirectoryName(s).IndexOfAny(new[] { '*', '?' }) != -1)
-                throw new Exception("Invalid path: " + s);
-            string dir = Path.GetDirectoryName(s);
-            if (String.IsNullOrEmpty(dir)) dir = Directory.GetCurrentDirectory();
-            return Directory.GetFiles(Path.GetFullPath(dir), Path.GetFileName(s));
         }
 
         public enum Kind
@@ -221,6 +220,40 @@ namespace ILRepacking
             return targetPlatformDirectory;
         }
 
+        public static IEnumerable<AssemblyName> GetRepackAssemblyNames(Type typeInRepackedAssembly)
+        {
+            try
+            {
+                using (Stream stream = typeInRepackedAssembly.Assembly.GetManifestResourceStream(ResourcesRepackStep.ILRepackListResourceName))
+                if (stream != null)
+                {
+                    string[] list = (string[])new BinaryFormatter().Deserialize(stream);
+                    return list.Select(x => new AssemblyName(x));
+                }
+            }
+            catch (Exception)
+            {
+            }
+            return Enumerable.Empty<AssemblyName>();
+        }
+
+        public static AssemblyName GetRepackAssemblyName(IEnumerable<AssemblyName> repackAssemblyNames, string repackedAssemblyName, Type fallbackType)
+        {
+            return repackAssemblyNames?.FirstOrDefault(name => name.Name == repackedAssemblyName) ?? fallbackType.Assembly.GetName();
+        }
+
+        void PrintRepackVersion()
+        {
+            var assemblies = GetRepackAssemblyNames(typeof(ILRepack));
+            var ilRepack = GetRepackAssemblyName(assemblies, "ILRepack", typeof(ILRepack));
+            Logger.Info($"IL Repack - Version {ilRepack.Version.ToString(3)}");
+            Logger.Verbose($"Runtime: {typeof(ILRepack).Assembly.FullName}");
+            foreach (var asb in assemblies)
+            {
+                Logger.Verbose($" - {asb.FullName}");
+            }
+        }
+
         /// <summary>
         /// The actual repacking process, called by main after parsing arguments.
         /// When referencing this assembly, call this after setting the merge properties.
@@ -228,6 +261,7 @@ namespace ILRepacking
         public void Repack()
         {
             Options.Validate();
+            PrintRepackVersion();
             _reflectionHelper = new ReflectionHelper(this);
             ResolveSearchDirectories();
 
@@ -235,7 +269,7 @@ namespace ILRepacking
             ReadInputAssemblies();
             GlobalAssemblyResolver.RegisterAssemblies(MergedAssemblies);
 
-            _platformFixer = new PlatformFixer(PrimaryAssemblyMainModule.Runtime);
+            _platformFixer = new PlatformFixer(this, PrimaryAssemblyMainModule.Runtime);
             _mappingHandler = new MappingHandler();
             bool hadStrongName = PrimaryAssemblyDefinition.Name.HasPublicKey;
 
@@ -282,27 +316,13 @@ namespace ILRepacking
 
             if (Options.Version != null)
                 TargetAssemblyDefinition.Name.Version = Options.Version;
-            // TODO: Win32 version/icon properties seem not to be copied... limitation in cecil 0.9x?
-            StrongNameKeyPair snkp = null;
-            if (Options.KeyFile != null && File.Exists(Options.KeyFile))
-            {
-                using (var stream = new FileStream(Options.KeyFile, FileMode.Open, FileAccess.Read, FileShare.Read))
-                {
-                    snkp = new StrongNameKeyPair(stream);
-                }
-                TargetAssemblyDefinition.Name.PublicKey = snkp.PublicKey;
-                TargetAssemblyDefinition.Name.Attributes |= AssemblyAttributes.PublicKey;
-                TargetAssemblyMainModule.Attributes |= ModuleAttributes.StrongNameSigned;
-            }
-            else
-            {
-                TargetAssemblyDefinition.Name.PublicKey = null;
-                TargetAssemblyMainModule.Attributes &= ~ModuleAttributes.StrongNameSigned;
-            }
-            _lineIndexer = new IKVMLineIndexer(this);
+
+            _lineIndexer = new IKVMLineIndexer(this, Options.LineIndexation);
+            var signingStep = new SigningStep(this, Options);
 
             List<IRepackStep> repackSteps = new List<IRepackStep>
             {
+                signingStep,
                 new ReferencesRepackStep(Logger, this),
                 new TypesRepackStep(Logger, this, _repackImporter, Options),
                 new ResourcesRepackStep(Logger, this, Options),
@@ -316,12 +336,11 @@ namespace ILRepacking
                 step.Perform();
             }
 
-            var parameters = new WriterParameters();
-            if ((snkp != null) && !Options.DelaySign)
-                parameters.StrongNameKeyPair = snkp;
-            // write PDB/MDB?
-            if (Options.DebugInfo)
-                parameters.WriteSymbols = true;
+            var parameters = new WriterParameters
+            {
+                StrongNameKeyPair = signingStep.KeyPair,
+                WriteSymbols = Options.DebugInfo
+            };
 
             if (MemoryOnly)
                 return;
@@ -351,20 +370,6 @@ namespace ILRepacking
             ConfigMerger.Process(this);
             if (Options.XmlDocumentation)
                 DocumentationMerger.Process(this);
-
-            // TODO: we're done here, the code below is only test code which can be removed once it's all running fine
-            // 'verify' generated assembly
-            AssemblyDefinition asm2 = AssemblyDefinition.ReadAssembly(Options.OutputFile, new ReaderParameters(ReadingMode.Immediate) { AssemblyResolver = GlobalAssemblyResolver });
-            // lazy match on the name (not full) to catch requirements about merging different versions
-            bool failed = false;
-            foreach (var a in asm2.MainModule.AssemblyReferences.Where(x => MergedAssemblies.Any(y => Options.KeepOtherVersionReferences ? x.FullName == y.FullName : x.Name == y.Name.Name)))
-            {
-                // failed
-                Logger.Error("Merged assembly still references " + a.FullName);
-                failed = true;
-            }
-            if (failed)
-                throw new Exception("Merging failed, see above errors");
         }
 
         private void ResolveSearchDirectories()

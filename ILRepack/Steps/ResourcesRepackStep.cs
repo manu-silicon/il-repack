@@ -27,6 +27,7 @@ namespace ILRepacking.Steps
 {
     internal class ResourcesRepackStep : IRepackStep
     {
+        internal const string ILRepackListResourceName = "ILRepack.List";
         private readonly ILogger _logger;
         private readonly IRepackContext _repackContext;
         private readonly RepackOptions _options;
@@ -62,14 +63,17 @@ namespace ILRepacking.Steps
             var otherAssemblyProcessors =
                 new List<IResProcessor> { bamlResourcePatcher, bamlStreamCollector }.Union(GetCommonResourceProcessors()).ToList();
 
-            foreach (var assembly in _repackContext.MergedAssemblies)
+            // Primary Assembly *must* be the last one in order to properly gather the resources
+            // from dependencies
+            var assembliesList = _repackContext.OtherAssemblies.Concat(new[] { _repackContext.PrimaryAssemblyDefinition });
+            foreach (var assembly in assembliesList)
             {
                 bool isPrimaryAssembly = (assembly == _repackContext.PrimaryAssemblyDefinition);
                 var assemblyProcessors = isPrimaryAssembly ? primaryAssemblyProcessors : otherAssemblyProcessors;
 
                 foreach (var resource in assembly.Modules.SelectMany(x => x.Resources))
                 {
-                    if (resource.Name == "ILRepack.List")
+                    if (resource.Name == ILRepackListResourceName)
                     {
                         if (!_options.NoRepackRes && resource is EmbeddedResource)
                         {
@@ -258,7 +262,7 @@ namespace ILRepacking.Steps
             using (var stream = new MemoryStream())
             {
                 new BinaryFormatter().Serialize(stream, repackList.ToArray());
-                return new EmbeddedResource("ILRepack.List", ManifestResourceAttributes.Public, stream.ToArray());
+                return new EmbeddedResource(ILRepackListResourceName, ManifestResourceAttributes.Public, stream.ToArray());
             }
         }
     }
