@@ -38,6 +38,14 @@ namespace ILRepacking.Steps
             // Add all AssemblyReferences to merged assembly (probably not necessary)
             var targetAssemblyMainModule = _repackContext.TargetAssemblyMainModule;
 
+            foreach (var z in _repackContext.MergedAssemblies.SelectMany(x => x.Modules).SelectMany(x => x.AssemblyReferences))
+            {
+                string name = z.Name;
+                if (!_repackContext.MergedAssemblies.Any(y => y.Name.Name == name) && _repackContext.TargetAssemblyDefinition.Name.Name != name)
+                {
+                    _repackContext.PlatformFixer.FixPlatformVersion(z);
+                }
+            }
             _repackContext.LineIndexer.PostRepackReferences();
 
             // add all module references (pinvoke dlls)
