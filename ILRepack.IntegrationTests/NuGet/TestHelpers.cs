@@ -38,11 +38,30 @@ namespace ILRepack.IntegrationTests.NuGet
 
         private static void ReloadAndCheckReferences(RepackOptions repackOptions)
         {
-            var outputFile = AssemblyDefinition.ReadAssembly(repackOptions.OutputFile, new ReaderParameters(ReadingMode.Immediate));
-            var mergedFiles = repackOptions.ResolveFiles().Select(f => AssemblyDefinition.ReadAssembly(f, new ReaderParameters(ReadingMode.Deferred)));
-            foreach (var a in outputFile.MainModule.AssemblyReferences.Where(x => mergedFiles.Any(y => repackOptions.KeepOtherVersionReferences ? x.FullName == y.FullName : x.Name == y.Name.Name)))
+            using (
+                var outputFile = AssemblyDefinition.ReadAssembly(repackOptions.OutputFile,
+                    new ReaderParameters(ReadingMode.Immediate)))
             {
-                Assert.Fail($"Merged assembly retains a reference to one (or more) of the merged files: ${a.FullName}");
+                var mergedFiles =
+                    repackOptions.ResolveFiles()
+                        .Select(f => AssemblyDefinition.ReadAssembly(f, new ReaderParameters(ReadingMode.Deferred)));
+                foreach (
+                    var a in
+                        outputFile.MainModule.AssemblyReferences.Where(
+                            x =>
+                                mergedFiles.Any(
+                                    y =>
+                                    {
+                                        var res = repackOptions.KeepOtherVersionReferences
+                                            ? x.FullName == y.FullName
+                                            : x.Name == y.Name.Name;
+                                        y.Dispose();
+                                        return res;
+                                    })))
+                {
+                    Assert.Fail(
+                        $"Merged assembly retains a reference to one (or more) of the merged files: ${a.FullName}");
+                }
             }
         }
 

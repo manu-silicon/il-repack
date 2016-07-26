@@ -370,6 +370,13 @@ namespace ILRepacking
             ConfigMerger.Process(this);
             if (Options.XmlDocumentation)
                 DocumentationMerger.Process(this);
+
+            TargetAssemblyDefinition.Dispose();
+            GlobalAssemblyResolver.Dispose();
+            foreach (var ass in MergedAssemblies)
+            {
+                ass.Dispose();
+            }
         }
 
         private void ResolveSearchDirectories()

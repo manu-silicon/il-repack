@@ -9,6 +9,14 @@ namespace ILRepacking
 
         readonly IDictionary<string, AssemblyDefinition> cache;
 
+        public void Dispose()
+        {
+            foreach (var ass in cache)
+            {
+                ass.Value.Dispose();
+            }
+        }
+
         public RepackAssemblyResolver()
         {
             cache = new Dictionary<string, AssemblyDefinition>(StringComparer.Ordinal);
