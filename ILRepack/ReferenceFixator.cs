@@ -256,62 +256,27 @@ namespace ILRepacking
             meth.ReturnType = Fix(meth.ReturnType);
             FixReferences(meth.MethodReturnType.CustomAttributes);
             if (meth.HasBody)
-                FixReferences(meth.Body);
-        }
-
-        private void FixReferences(MethodBody body)
-        {
-            if (body.Scope != null)
-                FixReferences(body.Scope);
-
-            foreach (VariableDefinition var in body.Variables)
-                FixReferences(var);
-
-            foreach (Instruction instr in body.Instructions)
             {
-                FixReferences(instr);
-            }
-            foreach (ExceptionHandler eh in body.ExceptionHandlers)
-            {
-                switch (eh.HandlerType)
+                foreach (VariableDefinition var in meth.Body.Variables)
+                    FixReferences(var);
+
+                foreach (Instruction instr in meth.Body.Instructions)
                 {
-                    case ExceptionHandlerType.Catch:
-                        eh.CatchType = Fix(eh.CatchType);
-                        break;
+                    FixReferences(instr);
                 }
-            }
-
-            // If we have PDB symbols, let's fix method references
-            var pdbSymbols = body.Symbols as PdbMethodSymbols;
-            if (pdbSymbols != null)
-            {
-                if (pdbSymbols.MethodWhoseUsingInfoAppliesToThisMethod != null)
-                    pdbSymbols.MethodWhoseUsingInfoAppliesToThisMethod = Fix(pdbSymbols.MethodWhoseUsingInfoAppliesToThisMethod);
-
-                if (pdbSymbols.IteratorScopes != null)
+                foreach (ExceptionHandler eh in meth.Body.ExceptionHandlers)
                 {
-                    foreach (var scope in pdbSymbols.IteratorScopes)
+                    switch (eh.HandlerType)
                     {
-                        FixReferences(scope.Start);
-                        FixReferences(scope.End);
-                    }
-                }
-
-                if (pdbSymbols.SynchronizationInformation != null)
-                {
-                    if (pdbSymbols.SynchronizationInformation.KickoffMethod != null)
-                        pdbSymbols.SynchronizationInformation.KickoffMethod = Fix(pdbSymbols.SynchronizationInformation.KickoffMethod);
-
-                    foreach (var syncPoint in pdbSymbols.SynchronizationInformation.SynchronizationPoints)
-                    {
-                        if (syncPoint.ContinuationMethod != null)
-                            syncPoint.ContinuationMethod = Fix(syncPoint.ContinuationMethod);
+                        case ExceptionHandlerType.Catch:
+                            eh.CatchType = Fix(eh.CatchType);
+                            break;
                     }
                 }
             }
         }
 
-        private void FixReferences(Scope scope)
+        private void FixReferences(ScopeDebugInformation scope)
         {
             // Note: no need to fix variables as they are pointing to body.Variables elements
 
@@ -376,7 +341,7 @@ namespace ILRepacking
         {
             if (typeAttribute == null)
                 return false;
-            if (typeAttribute.Interfaces.Any(@interface => @interface.FullName == "java.lang.annotation.Annotation"))
+            if (typeAttribute.Interfaces.Any(@interface => @interface.InterfaceType.FullName == "java.lang.annotation.Annotation"))
                 return true;
             return typeAttribute.BaseType != null && IsAnnotation(typeAttribute.BaseType.Resolve());
         }
@@ -386,6 +351,14 @@ namespace ILRepacking
             for (int i = 0; i < refs.Count; i++)
             {
                 refs[i] = Fix(refs[i]);
+            }
+        }
+
+        private void FixReferences(Collection<InterfaceImplementation> refs)
+        {
+            for (int i = 0; i < refs.Count; i++)
+            {
+                refs[i].InterfaceType = Fix(refs[i].InterfaceType);
             }
         }
 

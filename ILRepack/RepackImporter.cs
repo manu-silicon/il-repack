@@ -74,6 +74,19 @@ namespace ILRepacking
             col.Add(nt);
         }
 
+        public InterfaceImplementation Import(InterfaceImplementation reference, IGenericParameterProvider context)
+        {
+            var res = new InterfaceImplementation(Import(reference.InterfaceType, context));
+            if (reference.HasCustomAttributes)
+            {
+                foreach (var attr in reference.CustomAttributes)
+                {
+                    res.CustomAttributes.Add(new CustomAttribute(Import(attr.Constructor), attr.GetBlob()));
+                }
+            }
+            return res;
+        }
+
         public TypeReference Import(TypeReference reference, IGenericParameterProvider context)
         {
             TypeDefinition type = _repackContext.GetMergedTypeFromTypeRef(reference);
@@ -354,7 +367,7 @@ namespace ILRepacking
                 CopyCustomAttributes(meth.MethodReturnType.CustomAttributes, nm.MethodReturnType.CustomAttributes, nm);
 
             if (meth.HasBody)
-                CloneTo(meth.Body, nm);
+                CloneTo(meth, nm);
             meth.Body = null; // frees memory
 
             nm.IsAddOn = meth.IsAddOn;
@@ -364,9 +377,10 @@ namespace ILRepacking
             nm.CallingConvention = meth.CallingConvention;
         }
 
-        private void CloneTo(MethodBody body, MethodDefinition parent)
+        private void CloneTo(MethodDefinition sourceMethod, MethodDefinition parent)
         {
             MethodBody nb = new MethodBody(parent);
+            var body = sourceMethod.Body;
             parent.Body = nb;
 
             nb.MaxStackSize = body.MaxStackSize;
@@ -374,14 +388,15 @@ namespace ILRepacking
             nb.LocalVarToken = body.LocalVarToken;
 
             foreach (VariableDefinition var in body.Variables)
-                nb.Variables.Add(new VariableDefinition(var.Name,
-                    Import(var.VariableType, parent)));
+            {
+                nb.Variables.Add(new VariableDefinition(Import(var.VariableType, parent)));
+            }
 
             nb.Instructions.SetCapacity(body.Instructions.Count);
             _repackContext.LineIndexer.PreMethodBodyRepack(body, parent);
             foreach (Instruction instr in body.Instructions)
             {
-                _repackContext.LineIndexer.ProcessMethodBodyInstruction(instr);
+                _repackContext.LineIndexer.ProcessMethodBodyInstruction(sourceMethod, instr);
 
                 Instruction ni;
 
@@ -471,7 +486,10 @@ namespace ILRepacking
                         default:
                             throw new InvalidOperationException();
                     }
-                ni.SequencePoint = instr.SequencePoint;
+                if (parent.HasDebugInformation)
+                {
+                    sourceMethod.DebugInformation.SequencePoints.Add(parent.DebugInformation.GetSequencePoint(instr));
+                }
                 nb.Instructions.Add(ni);
             }
             _repackContext.LineIndexer.PostMethodBodyRepack(parent);
@@ -486,8 +504,8 @@ namespace ILRepacking
                 instr.Operand = GetInstruction(body, nb, (Instruction)body.Instructions[i].Operand);
             }
 
-            if (body.Scope != null)
-                nb.Scope = CloneScope(body, parent, nb, body.Scope);
+            if (parent.HasDebugInformation && parent.DebugInformation.Scope != null)
+                parent.DebugInformation.Scope = CloneScope(sourceMethod, parent, parent.DebugInformation.Scope);
 
             foreach (ExceptionHandler eh in body.ExceptionHandlers)
             {
@@ -509,57 +527,51 @@ namespace ILRepacking
 
                 nb.ExceptionHandlers.Add(neh);
             }
-
-            // Generate a copy of symbols
-            if (body.Symbols != null)
-            {
-                nb.Symbols = body.Symbols.Clone();
-                nb.Symbols.Body = nb;
-
-                // Update PDB specific symbols (they contain method references)
-                var pdbSymbols = nb.Symbols as PdbMethodSymbols;
-                if (pdbSymbols != null)
-                {
-                    if (pdbSymbols.MethodWhoseUsingInfoAppliesToThisMethod != null)
-                        pdbSymbols.MethodWhoseUsingInfoAppliesToThisMethod =
-                            Import(pdbSymbols.MethodWhoseUsingInfoAppliesToThisMethod, parent);
-
-                    // Note: we don't need to update PdbScope.Start/End since offsets shouldn't change
-
-                    if (pdbSymbols.SynchronizationInformation != null)
-                    {
-                        if (pdbSymbols.SynchronizationInformation.KickoffMethod != null)
-                            pdbSymbols.SynchronizationInformation.KickoffMethod =
-                                Import(pdbSymbols.SynchronizationInformation.KickoffMethod);
-
-                        foreach (var syncPoint in pdbSymbols.SynchronizationInformation.SynchronizationPoints)
-                        {
-                            if (syncPoint.ContinuationMethod != null)
-                                syncPoint.ContinuationMethod = Import(syncPoint.ContinuationMethod);
-                        }
-                    }
-                }
-            }
         }
 
-        private Scope CloneScope(MethodBody body, MethodDefinition parent, MethodBody nb, Scope scope)
+        private static Instruction GetInstruction(Collection<Instruction> instructions, int offset)
         {
-            var result = new Scope
+            var size = instructions.Count;
+            if (offset < 0 || offset > instructions[size - 1].Offset)
+                return null;
+
+            int min = 0;
+            int max = size - 1;
+            while (min <= max)
             {
-                Start = GetInstruction(body, nb, scope.Start),
-                End = GetInstruction(body, nb, scope.End),
-            };
+                int mid = min + ((max - min) / 2);
+                var instruction = instructions[mid];
+                var instruction_offset = instruction.Offset;
+
+                if (offset == instruction_offset)
+                    return instruction;
+
+                if (offset < instruction_offset)
+                    max = mid - 1;
+                else
+                    min = mid + 1;
+            }
+
+            return null;
+        }
+        private ScopeDebugInformation CloneScope(MethodDefinition source, MethodDefinition parent, ScopeDebugInformation scope)
+        {
+            var body = source.Body;
+            var nb = parent.Body;
+            var result = new ScopeDebugInformation(
+                GetInstruction(body, nb, GetInstruction(body.Instructions, scope.Start.Offset)),
+                GetInstruction(body, nb, GetInstruction(body.Instructions, scope.End.Offset)));
 
             if (scope.HasVariables)
             {
                 foreach (var var in scope.Variables)
-                    result.Variables.Add(nb.Variables[var.Index]);
+                    result.Variables.Add(source.DebugInformation.Scope.Variables[var.Index]);
             }
 
             if (scope.HasScopes)
             {
                 foreach (var subscope in scope.Scopes)
-                    result.Scopes.Add(CloneScope(body, parent, nb, subscope));
+                    result.Scopes.Add(CloneScope(source, parent, subscope));
             }
 
             return result;
@@ -586,7 +598,7 @@ namespace ILRepacking
             // don't copy these twice if UnionMerge==true
             // TODO: we can move this down if we chek for duplicates when adding
             CopySecurityDeclarations(type.SecurityDeclarations, nt.SecurityDeclarations, nt);
-            CopyTypeReferences(type.Interfaces, nt.Interfaces, nt);
+            CopyInterfaceImplementations(type.Interfaces, nt.Interfaces, nt);
             CopyCustomAttributes(type.CustomAttributes, nt.CustomAttributes, nt);
             return nt;
         }
@@ -803,6 +815,14 @@ namespace ILRepacking
             }
             // default is false
             return false;
+        }
+
+        public void CopyInterfaceImplementations(Collection<InterfaceImplementation> input, Collection<InterfaceImplementation> output, IGenericParameterProvider context)
+        {
+            foreach (InterfaceImplementation ta in input)
+            {
+                output.Add(Import(ta, context));
+            }
         }
 
         public void CopyTypeReferences(Collection<TypeReference> input, Collection<TypeReference> output, IGenericParameterProvider context)

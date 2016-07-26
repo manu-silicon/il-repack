@@ -57,14 +57,14 @@ namespace ILRepacking
             }
         }
 
-        public void ProcessMethodBodyInstruction(Instruction instr)
+        public void ProcessMethodBodyInstruction(MethodDefinition meth, Instruction instr)
         {
             if (!enabled)
                 return;
 
-            var currentSeqPoint = instr.SequencePoint;
-            if (lineNumberWriter != null && currentSeqPoint != null)
-            {
+            if (lineNumberWriter != null && meth.HasDebugInformation)
+            { 
+                var currentSeqPoint = meth.DebugInformation.GetSequencePoint(instr);
                 if (fileName == null && currentSeqPoint.Document != null)
                 {
                     var url = currentSeqPoint.Document.Url;
